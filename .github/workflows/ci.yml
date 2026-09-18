@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up mise
+        uses: jdx/mise-action@v4
+        with:
+          install: true
+
+      - name: Restore Go cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('.mise.toml', 'go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
+
+      - name: Test (race)
+        # race 检测需要 cgo，Linux runner 自带 gcc；本地 Windows 开发机通常没有，
+        # 所以这条是竞态问题的唯一自动防线。
+        run: mise exec -- go test -race -count=1 ./...
+
+      - name: Lint
+        run: mise run lint
+
+      - name: Build
+        run: mise run build

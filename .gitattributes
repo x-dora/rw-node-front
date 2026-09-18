@@ -1,0 +1,8 @@
+# 文本文件统一 LF。Windows 上 core.autocrlf=true 时工作区会被 checkout 成 CRLF，
+# gofmt 会把整文件判为「格式不符」，diff 里也会混进行尾变更。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gz binary
+*.tar binary

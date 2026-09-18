@@ -1,0 +1,147 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            asset_name: linux-64
+          - goos: linux
+            goarch: arm64
+            asset_name: linux-arm64-v8a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache-dependency-path: go.sum
+
+      - name: Build release package
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build_assets dist
+          version="$(tr -d '[:space:]' < VERSION)"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${version}" \
+            -o build_assets/rw-node-front .
+          cp README.md build_assets/README.md
+          cp LICENSE build_assets/LICENSE
+          pushd build_assets
+          tar -czf "../dist/rw-node-front-${{ matrix.asset_name }}.tar.gz" .
+          popd
+
+          file="./dist/rw-node-front-${{ matrix.asset_name }}.tar.gz"
+          dgst="${file}.dgst"
+          for method in md5 sha1 sha256 sha512
+          do
+            openssl dgst "-${method}" "$file" | sed 's/([^)]*)//g' >> "$dgst"
+          done
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.asset_name }}
+          path: |
+            dist/rw-node-front-${{ matrix.asset_name }}.tar.gz
+            dist/rw-node-front-${{ matrix.asset_name }}.tar.gz.dgst
+
+  publish:
+    needs: binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          file_version="$(tr -d '[:space:]' < VERSION)"
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            tag="${{ github.ref_name }}"
+            if [[ "$tag" != "v$file_version" ]]; then
+              echo "tag $tag does not match VERSION $file_version" >&2
+              exit 1
+            fi
+          else
+            tag="v$file_version"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/${{ github.repository }}/releases/generate-notes" \
+            -f "tag_name=${{ steps.version.outputs.tag }}" \
+            -f "target_commitish=${{ github.sha }}" --jq '.body' > notes-generated.md
+          sed -i '/^\*\*Full Changelog\*\*:/d' notes-generated.md
+
+          {
+            echo "## Assets"
+            echo
+            echo "- \`rw-node-front-linux-64.tar.gz\` — linux/amd64"
+            echo "- \`rw-node-front-linux-arm64-v8a.tar.gz\` — linux/arm64"
+            echo "- 每个包附 \`.dgst\`，内含 md5/sha1/sha256/sha512。"
+            echo
+            echo "由 [rw-node](https://github.com/x-dora/rw-node) 通过 \`.front-version\` 引用。"
+            echo
+            cat notes-generated.md
+          } > release-notes.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists; uploading assets with --clobber"
+            gh release upload "$tag" release-assets/* --clobber
+            exit 0
+          fi
+          gh release create "$tag" \
+            --target "${{ github.sha }}" \
+            --title "$tag" \
+            --notes-file release-notes.md \
+            --latest
+          gh release upload "$tag" release-assets/* --clobber
