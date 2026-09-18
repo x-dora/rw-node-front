@@ -40,7 +40,7 @@ func startMockUpstream(t *testing.T) *mockUpstream {
 			m.conns++
 			m.mu.Unlock()
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				buf := make([]byte, 4096)
 				for {
 					n, err := conn.Read(buf)
@@ -236,7 +236,7 @@ func TestFrontListenerServesHTTPWithIntactRequestLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_, _ = fmt.Fprintf(conn, "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
 
 	body, err := io.ReadAll(conn)
@@ -333,7 +333,7 @@ func TestFrontListenerServesHTTPPromptly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_, _ = fmt.Fprintf(conn, "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
 	_, _ = io.ReadAll(conn)
 

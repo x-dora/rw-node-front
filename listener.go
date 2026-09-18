@@ -97,11 +97,11 @@ func (l *frontListener) handleConn(conn net.Conn) {
 			_ = conn.Close()
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		l.relay(conn, head, l.sshPort)
 
 	case routeTLS:
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		l.relay(conn, head, l.tlsUpstream(sni))
 
 	case routeHTTP:
@@ -109,7 +109,7 @@ func (l *frontListener) handleConn(conn net.Conn) {
 		// 也走内核 splice。若改成交给 ReverseProxy，升级后的长连接就会退回
 		// 用户态拷贝——那正是原先 Caddy 的形态，等于没解决问题。
 		if port, ok := l.httpUpstream(path); ok {
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			l.relay(conn, head, port)
 			return
 		}
@@ -280,7 +280,7 @@ func (l *frontListener) relay(down net.Conn, head []byte, port int) {
 		log.Printf("front: 连接上游 %s 失败: %v", upstreamAddr, err)
 		return
 	}
-	defer up.Close()
+	defer func() { _ = up.Close() }()
 
 	if len(head) > 0 {
 		if _, err := up.Write(head); err != nil {
