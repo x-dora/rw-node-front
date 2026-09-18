@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -68,11 +66,41 @@ func (h *httpFront) serveStatic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, err := os.Stat(filepath.Join(h.siteDir, "index.html")); err != nil {
-		http.NotFound(w, r)
+
+	dir := http.Dir(h.siteDir)
+	if h.serveFile(w, r, dir, r.URL.Path) {
 		return
 	}
-	http.FileServer(http.Dir(h.siteDir)).ServeHTTP(w, r)
+	// 复刻原先 Caddyfile 里的 `try_files {path} {path}/ /index.html`：路径不存在
+	// 时落到首页，这样任意 URL 看起来都是一个正常的静态站点——伪装页面如果对
+	// 未知路径回 404，本身就是一种可识别的指纹。
+	if !h.serveFile(w, r, dir, "/index.html") {
+		http.NotFound(w, r)
+	}
+}
+
+// serveFile 直接把文件内容吐出去，返回是否成功。
+//
+// 刻意不用 http.FileServer：它会把以 /index.html 结尾的 URL 301 重定向到 ./，
+// 而原先 Caddy 的 try_files 是原样返回的——从 Caddy 迁过来的行为不该在这里变。
+// http.Dir.Open 自带目录穿越防护，所以路径检查不必自己再做一遍。
+func (h *httpFront) serveFile(w http.ResponseWriter, r *http.Request, dir http.Dir, name string) bool {
+	file, err := dir.Open(name)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+
+	info, err := file.Stat()
+	if err != nil || info.IsDir() {
+		return false
+	}
+	seeker, ok := file.(io.ReadSeeker)
+	if !ok {
+		return false
+	}
+	http.ServeContent(w, r, info.Name(), info.ModTime(), seeker)
+	return true
 }
 
 func newProxy(target string, transport http.RoundTripper) *httputil.ReverseProxy {
